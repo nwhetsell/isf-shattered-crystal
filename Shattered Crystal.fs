@@ -5,60 +5,26 @@
     "CREDIT": "Hyeve <https://www.shadertoy.com/user/Hyeve>",
     "DESCRIPTION": "Converted from <https://www.shadertoy.com/view/ssXcR2>",
     "INPUTS": [
-
+        {
+            "NAME": "objectColor",
+            "LABEL": "Object color",
+            "TYPE": "color",
+            "DEFAULT": [0.5, 0.5, 0.8, 1]
+        }
     ],
     "ISFVSN": "2"
 }*/
 
-#define iResolution RENDERSIZE
-#define iTime TIME
-
-
 #define rot(a) mat2(cos(a),sin(a),-sin(a),cos(a))
 
-
-
-//NOTE: this style of very compact, hard-to-read code makes
-//things easier for shaders, especially in the view of
-//livecoding compos where you have very limited time to
-//write them, but it would be absolutely awful anywhere else,
-//and I definitely don't recommend doing it outside of shaders like this
-
-
-
-//all the variables that can be are global because it makes things easier and more compact
-vec3 cp = vec3(0);
-vec3 cn = vec3(0);
-vec3 cr = vec3(0);
-vec3 ro = vec3(0);
-vec3 rd = vec3(0);
-vec3 cc = vec3(0);
-vec3 oc = vec3(0);
-vec3 fc = vec3(0);
-vec3 ss = vec3(0);
-vec3 gl = vec3(0);
-
-float tt = 0.;
-float cd = 0.;
-float sd = 1.;
-float ot = 0.;
-float ct = 1.;
-float iv = 1.;
-float io = 0.;
-
-//in order: current ray position, normal, ray direction, ray origin,
-//original ray direction, current colour, object colour, final colour,
-//subsurface (colour), glow (color), time, current distance, scene distance,
-//object transmission, current transmission, inversion (for transparency), index of refraction
-
-//cube SDF, inlined
+// cube SDF, inlined
 float bx(vec3 p, vec3 s)
 {
     vec3 q = abs(p) - s;
     return min(max(q.x, max(q.y, q.z)), 0.) + length(max(q, 0.));
 }
 
-//"shatter" function - subtracts a bunch of semi-random planes from the object
+// "shatter" function - subtracts a bunch of semi-random planes from the object
 float sh(vec3 p, float d, float n, float a, float s, float o)
 {
     // loop for each plane
@@ -78,89 +44,107 @@ float sh(vec3 p, float d, float n, float a, float s, float o)
 }
 
 // scene/map function
+float time = 0.;
+vec3 subsurfaceColor = vec3(0);
+vec3 glowColor = vec3(0);
+float objectTransmission = 0.;
+float indexOfRefraction = 0.;
 float mp(vec3 p)
 {
     // rotate entire scene slowly
-	p.xz *= rot(tt * 0.03 + 1.);
-	p.yz *= rot(tt * 0.05 + 0.5);
+	p.xz *= rot(time * 0.03 + 1.);
+	p.yz *= rot(time * 0.05 + 0.5);
     // create 2 boxes - one is the actual object, one is purely used for my fake subsurface
 	float d = bx(p, vec3(2)) - 0.1;
 	float c = bx(p, vec3(1.2));
     // shatter box
-	d = sh(p, d, 9., sin(tt * 0.01 + 0.3) * 3., (cos(tt * 0.1) * 0.5 + 0.5) * 0.5 + 0.008, 0.4);
+	d = sh(p, d, 9., sin(time * 0.01 + 0.3) * 3., (cos(time * 0.1) * 0.5 + 0.5) * 0.5 + 0.008, 0.4);
     // set scene distance, add glow
-	sd = d;
-	gl += 0.001 / (0.001 + d*d) * normalize(p*p) * 0.008;
+	float sceneDistance = d;
+	glowColor += 0.001 / (0.001 + d*d) * normalize(p*p) * 0.008;
     // set object values - doing inside the scene allows for easier and nicer effects!
-	if (sd < 0.001) {
-		oc = vec3(0.5, 0.5, 0.8); // base colour - changing this will have a big impact
-		ss = pow(c, 3.) * vec3(0.5, 0.4, 0.6); //fake subsurface
-		io = 1.5 + c * 0.1; // index of refraction
-		ot = 0.8 - c * 0.2; // object transmission
+	if (sceneDistance < 0.001) {
+		subsurfaceColor = pow(c, 3.) * vec3(0.5, 0.4, 0.6); // fake subsurface
+		indexOfRefraction = 1.5 + c * 0.1; // index of refraction
+		objectTransmission = 0.8 - c * 0.2; // object transmission
 	}
-	return sd;// return the distance - this is only used for the normals function
+	return sceneDistance;// return the distance - this is only used for the normals function
 }
 
 // inlined raymarcher. Mostly standard, but multiplies the scene distance by the inversion factor
-void tr()
+void tr(vec3 rayOrigin, vec3 originalRayDirection, float transparencyInversion, out float currentDistance)
 {
-    cd = 0.;
+    currentDistance = 0.;
     for (float i = 0.; i < 222.; i++) {
-        mp(ro + rd * cd);
-        sd *= iv;
-        cd += sd;
-        if (sd < 0.00005 || cd > 16.)
+        float sceneDistance = mp(rayOrigin + originalRayDirection * currentDistance);
+        sceneDistance *= transparencyInversion;
+        currentDistance += sceneDistance;
+        if (sceneDistance < 0.00005 || currentDistance > 16.)
             break;
     }
 }
 
 // inlined normal calculation. Using this mat3 is actually slightly less compact, but much cleaner
-void nm()
+vec3 nm(vec3 currentRayPosition)
 {
-    mat3 k = mat3(cp, cp, cp) - mat3(.0001);
-    cn = normalize(mp(cp) - vec3(mp(k[0]), mp(k[1]), mp(k[2])));
+    mat3 k = mat3(currentRayPosition, currentRayPosition, currentRayPosition) - mat3(.0001);
+    return normalize(mp(currentRayPosition) - vec3(mp(k[0]), mp(k[1]), mp(k[2])));
 }
 
 // pixel "shader" (coloury bits)
-void px()
+vec3 px(vec3 currentRayPosition, vec3 currentRayNormal, vec3 currentRayDirection, float currentDistance)
 {
-    cc = vec3(0.3, 0.45, 0.7) + length(cr*cr) * 0.2 + gl; // assign current color to background colour + glow
-    if (cd > 16.)
-        return; // return if we just want background
+    vec3 currentColor = vec3(0.3, 0.45, 0.7) + length(currentRayDirection * currentRayDirection) * 0.2 + glowColor; // assign current color to background colour + glow
+    if (currentDistance > 16.)
+        return currentColor; // return if we just want background
     // axis-based diffuse lighting
     vec3 l = vec3(0.7, 0.4, 0.9);
-    float df = length(cn * l);
+    float df = length(currentRayNormal * l);
     // very basic fresnel effect and custom specular effect
     float fr = pow(1. - df, 2.) * 0.5;
-    float sp = (1. - length(cross(cr, cn))) * 0.2;
-    float ao = min(mp(cp + cn * 0.5) - 0.5, 0.3) * 0.3; // custom ambient occulusion effect
-    cc = oc * (df + fr + ss) + fr + sp + ao + gl; // mix it all together
+    float sp = (1. - length(cross(currentRayDirection, currentRayNormal))) * 0.2;
+    float ao = min(mp(currentRayPosition + currentRayNormal * 0.5) - 0.5, 0.3) * 0.3; // custom ambient occulusion effect
+    return objectColor.rgb * (df + fr + subsurfaceColor) + fr + sp + ao + glowColor; // mix it all together
 }
 
 void main()
 {
-    tt = mod(iTime + 19., 120.); // keep time low to reduce issues
-    vec2 uv = vec2(gl_FragCoord.x / iResolution.x, gl_FragCoord.y / iResolution.y);
+    time = mod(TIME + 19., 120.); // keep time low to reduce issues
+
+    vec2 uv = vec2(gl_FragCoord.x / RENDERSIZE.x, gl_FragCoord.y / RENDERSIZE.y);
     uv -= 0.5;
-    uv /= vec2(iResolution.y / iResolution.x, 1);
-    ro = vec3(0, 0 , -8);
-    rd = normalize(vec3(uv, 1)); // ray origin and direction
+    uv /= vec2(RENDERSIZE.y / RENDERSIZE.x, 1);
+
+    // ray origin and direction
+    vec3 rayOrigin = vec3(0, 0 , -8);
+    vec3 originalRayDirection = normalize(vec3(uv, 1));
+
+    float currentTransmission = 1.;
+    float transparencyInversion = 1.;
+    vec3 finalColor = vec3(0);
+
     for (int i = 0; i < 6 * 2; i++) { // compacted transparency loop - depth 6 (2 pass per layer)
-        tr();
-        cp = ro + rd * cd;
-        nm();
-        cr = rd;
-        ro = cp - cn * (0.01 * iv); // trace and calculate values
-        rd = refract(cr, cn * iv, iv > 0. ? 1. / io : io); // refract
-        if (length(rd) == 0.)
-            rd = reflect(cr, cn * iv); // reflect if refraction failed
-        px();
-        iv *= -1.;
-        if (iv < 0.)
-            fc = mix(fc, cc, ct); // get colour and mix it
-        ct *= ot;
-        if (ct <= 0. || cd > 128.)
+        float currentDistance;
+        tr(rayOrigin, originalRayDirection, transparencyInversion, currentDistance);
+
+        vec3 currentRayPosition = rayOrigin + originalRayDirection * currentDistance;
+        vec3 currentRayNormal = nm(currentRayPosition);
+
+        vec3 currentRayDirection = originalRayDirection;
+        rayOrigin = currentRayPosition - currentRayNormal * (0.01 * transparencyInversion); // trace and calculate values
+        originalRayDirection = refract(currentRayDirection, currentRayNormal * transparencyInversion, transparencyInversion > 0. ? 1. / indexOfRefraction : indexOfRefraction); // refract
+        if (length(originalRayDirection) == 0.)
+            originalRayDirection = reflect(currentRayDirection, currentRayNormal * transparencyInversion); // reflect if refraction failed
+
+        vec3 currentColor = px(currentRayPosition, currentRayNormal, currentRayDirection, currentDistance);
+
+        transparencyInversion *= -1.;
+        if (transparencyInversion < 0.)
+            finalColor = mix(finalColor, currentColor, currentTransmission); // get colour and mix it
+        currentTransmission *= objectTransmission;
+        if (currentTransmission <= 0. || currentDistance > 128.)
             break; // update trasmission and break if needed
     }
-    gl_FragColor = vec4(fc, 1); // output colour
+
+    gl_FragColor = vec4(finalColor, 1); // output colour
 }
