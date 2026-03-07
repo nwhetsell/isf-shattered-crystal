@@ -66,7 +66,7 @@ float sh(vec3 p, float d, float n, float a, float s, float o)
 	    // apply semi-random rotation
 		p.xy *= rot(a);
 		p.xz *= rot(a * 0.5);
-		p.yz *= rot(a+a);
+		p.yz *= rot(a + a);
 		// pick semi-random axis for plane
 		float c = mod(i, 3.) == 0. ? p.x : mod(i, 3.) == 1. ? p.y : p.z;
 		// subtract plane from object, using onioning and offset
@@ -158,7 +158,7 @@ void main()
         iv *= -1.;
         if (iv < 0.)
             fc = mix(fc, cc, ct); // get colour and mix it
-        ct*=ot;
+        ct *= ot;
         if (ct <= 0. || cd > 128.)
             break; // update trasmission and break if needed
     }
